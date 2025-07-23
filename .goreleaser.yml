@@ -1,0 +1,165 @@
+# .goreleaser.yml
+# Configuration for GoReleaser
+# https://goreleaser.com
+
+project_name: gocodecli
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: gocodecli
+    main: ./cmd/gocodecli
+    binary: gocodecli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - 386
+    ignore:
+      - goos: darwin
+        goarch: 386
+      - goos: linux
+        goarch: 386
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}-
+      {{- .Version }}-
+      {{- .Os }}-
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'typo'
+      - 'Merge pull request'
+      - 'Merge branch'
+  groups:
+    - title: 'Features'
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: 'Enhancements'
+      regexp: "^.*enhancement[(\\w)]*:+.*$"
+      order: 2
+    - title: 'Other work'
+      order: 999
+
+release:
+  github:
+    owner: elee1766
+    name: gocodecli
+  draft: true
+  prerelease: auto
+  name_template: "Release {{.Tag}}"
+  footer: |
+    ## Installation
+    
+    See the [installation guide](https://github.com/elee1766/gocodecli/blob/main/INSTALL.md) for detailed instructions.
+    
+    ### Quick Install
+    
+    ```bash
+    # Using go install
+    go install github.com/elee1766/gocodecli/cmd/gocodecli@{{.Tag}}
+    
+    # Using homebrew
+    brew tap elee1766/gocodecli
+    brew install gocodecli
+    ```
+
+brews:
+  - name: gocodecli
+    tap:
+      owner: elee1766
+      name: homebrew-gocodecli
+    folder: Formula
+    homepage: "https://github.com/elee1766/gocodecli"
+    description: "A Go implementation of Claude Code"
+    license: "MIT"
+    test: |
+      system "#{bin}/gocodecli", "--version"
+    dependencies:
+      - name: git
+        type: optional
+    install: |
+      bin.install "gocodecli"
+
+scoop:
+  bucket:
+    owner: elee1766
+    name: scoop-gocodecli
+  homepage: "https://github.com/elee1766/gocodecli"
+  description: "A Go implementation of Claude Code"
+  license: MIT
+
+nfpms:
+  - id: packages
+    package_name: gocodecli
+    vendor: elee1766
+    homepage: https://github.com/elee1766/gocodecli
+    maintainer: elee1766 <elee1766@github.com>
+    description: A Go implementation of Claude Code
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+    meta: true
+    contents:
+      - src: ./README.md
+        dst: /usr/share/doc/gocodecli/README.md
+      - src: ./LICENSE
+        dst: /usr/share/doc/gocodecli/LICENSE
+
+dockers:
+  - image_templates:
+      - "elee1766/gocodecli:{{ .Tag }}"
+      - "elee1766/gocodecli:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"

@@ -1,0 +1,236 @@
+{
+  "version": "1.0",
+  "api": {
+    "provider": "openrouter",
+    "api_key_env_var": "OPENROUTER_API_KEY",
+    "timeout": 30000000000,
+    "retry": {
+      "max_retries": 3,
+      "initial_delay": 1000000000,
+      "max_delay": 10000000000,
+      "multiplier": 2,
+      "retryable_errors": [
+        "rate_limit_exceeded",
+        "timeout",
+        "connection_error"
+      ]
+    },
+    "rate_limit": {
+      "requests_per_minute": 60,
+      "tokens_per_minute": 100000,
+      "burst_size": 10
+    }
+  },
+  "agent": {
+    "model": "google/gemini-2.0-flash",
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "system_prompt": "You are an AI assistant powered by gocodecli. You help developers understand, write, and improve code.\n\nYour capabilities include:\n- Reading and analyzing code files\n- Writing and modifying code\n- Executing commands safely\n- Searching the web for information\n- Managing project files and directories\n\nImportant guidelines:\n1. Always verify paths and commands before execution\n2. Show previews of changes before applying them\n3. Ask for clarification when requests are ambiguous\n4. Provide clear explanations for your actions\n5. Respect the configured permissions and security settings\n\nYou have access to various tools. Use them responsibly and always prioritize the user's safety and data integrity.",
+    "max_retries": 3,
+    "retry_delay": 1000
+  },
+  "permissions": {
+    "default_mode": "prompt",
+    "tools": {
+      "allow": [
+        "read_file",
+        "write_file",
+        "list_directory",
+        "execute_command",
+        "web_search",
+        "web_fetch"
+      ],
+      "deny": [
+        "system_*",
+        "admin_*"
+      ],
+      "require_confirmation": [
+        "execute_command",
+        "write_file",
+        "delete_*"
+      ]
+    },
+    "filesystem": {
+      "read_paths": [
+        ".",
+        "~/.config/gocodecli"
+      ],
+      "write_paths": [
+        "."
+      ],
+      "deny_paths": [
+        "/etc",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/boot",
+        "/root"
+      ],
+      "max_file_size": 10485760,
+      "denied_extensions": [
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".app",
+        ".dmg",
+        ".pkg",
+        ".deb",
+        ".rpm"
+      ],
+      "sandbox_mode": false
+    },
+    "commands": {
+      "denied_commands": [
+        "rm -rf /",
+        "format",
+        "fdisk",
+        "dd",
+        "mkfs",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "systemctl",
+        "service"
+      ],
+      "denied_patterns": [
+        ".*\\brm\\s+-rf\\s+/.*",
+        ".*\\bsudo\\s+rm.*",
+        ".*\\b(curl|wget).*\\|\\s*(bash|sh).*"
+      ],
+      "require_sudo": false,
+      "max_timeout": 300000000000,
+      "filter_env_vars": [
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "GITHUB_TOKEN",
+        "GITLAB_TOKEN",
+        "NPM_TOKEN",
+        "PYPI_PASSWORD"
+      ]
+    },
+    "network": {
+      "denied_domains": [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "*.local"
+      ],
+      "allow_localhost": false,
+      "allow_private_networks": false,
+      "max_request_size": 52428800
+    }
+  },
+  "security": {
+    "require_confirmation": true,
+    "show_preview": true,
+    "log_operations": true,
+    "audit_log": {
+      "enabled": false,
+      "path": "~/.local/share/gocodecli/audit.log",
+      "max_size": 104857600,
+      "max_backups": 5,
+      "format": "json"
+    },
+    "encryption": {
+      "encrypt_config": false,
+      "encrypt_logs": false,
+      "key_derivation": "argon2"
+    },
+    "session_timeout": 1800000000000
+  },
+  "preferences": {
+    "editor": {
+      "tab_size": 4,
+      "use_tabs": false,
+      "line_endings": "auto"
+    },
+    "ui": {
+      "theme": "auto",
+      "show_line_numbers": true,
+      "syntax_highlighting": true,
+      "compact_mode": false
+    },
+    "output": {
+      "format": "text",
+      "verbose": false,
+      "quiet": false,
+      "timestamp_format": "2006-01-02 15:04:05",
+      "show_diff": true
+    },
+    "behavior": {
+      "auto_save": true,
+      "confirm_before_exit": true,
+      "history_size": 1000,
+      "cache_duration": 86400000000000,
+      "default_timeout": 30000000000
+    }
+  },
+  "project": {
+    "root": ".",
+    "ignore_patterns": [
+      "node_modules/",
+      "vendor/",
+      ".git/",
+      "dist/",
+      "build/",
+      "*.log",
+      "*.tmp",
+      ".DS_Store"
+    ],
+    "use_gitignore": true
+  },
+  "tools": {
+    "bash": {
+      "enabled": true,
+      "config": {
+        "capture_output": true,
+        "inherit_env": true,
+        "shell": "/bin/bash",
+        "timeout": 300,
+        "working_dir": "."
+      }
+    },
+    "file": {
+      "enabled": true,
+      "config": {
+        "create_backup": false,
+        "encoding": "utf-8",
+        "line_endings": "auto",
+        "validate_syntax": true
+      }
+    },
+    "web": {
+      "enabled": true,
+      "config": {
+        "follow_redirect": true,
+        "max_redirects": 5,
+        "timeout": 30,
+        "user_agent": "gocodecli/1.0",
+        "verify_ssl": true
+      }
+    }
+  },
+  "observability": {
+    "logging": {
+      "file": {
+        "compress": false
+      }
+    }
+  },
+  "agents": {
+    "coder": {
+      "model": "google/gemini-2.0-flash",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "system_prompt": "You are an AI assistant powered by gocodecli. You help developers understand, write, and improve code.\n\nYour capabilities include:\n- Reading and analyzing code files\n- Writing and modifying code\n- Executing commands safely\n- Searching the web for information\n- Managing project files and directories\n\nImportant guidelines:\n1. Always verify paths and commands before execution\n2. Show previews of changes before applying them\n3. Ask for clarification when requests are ambiguous\n4. Provide clear explanations for your actions\n5. Respect the configured permissions and security settings\n\nYou have access to various tools. Use them responsibly and always prioritize the user's safety and data integrity.",
+      "max_retries": 3,
+      "retry_delay": 1000
+    }
+  },
+  "data": {},
+  "lsp": {
+    "enabled": false
+  }
+}
