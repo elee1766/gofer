@@ -7,6 +7,8 @@ this is a repo where im trying to build a framework around that
 
 my reference are claude code, gemini cli, and both the vercel and openai typescript sdks.
 
+if anyone would like to improve the prompts, add more hooks, add frameworks, etc, please feel free to.
+
 
 ## whats done so far
 
