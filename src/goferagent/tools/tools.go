@@ -67,3 +67,4 @@ func WebFetchTool() (agent.Tool, error) { return tool_webfetch.Tool() }
 
 // Tools that require a shell manager
 func RunCommandTool(shellManager *shell.ShellManager) agent.Tool { return tool_runcommand.Tool(shellManager) }
+func RunCommandToolSingle(shellManager *shell.SingleShellManager) agent.Tool { return tool_runcommand.ToolWithSingleShell(shellManager) }

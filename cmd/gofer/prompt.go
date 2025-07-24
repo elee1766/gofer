@@ -11,7 +11,6 @@ import (
 	"github.com/elee1766/gofer/src/goferagent"
 	"github.com/elee1766/gofer/src/goferagent/tools"
 	"github.com/elee1766/gofer/src/executor"
-	"github.com/elee1766/gofer/src/fs"
 	"github.com/elee1766/gofer/src/shell"
 	"github.com/elee1766/gofer/src/storage"
 	"github.com/spf13/afero"
@@ -50,16 +49,21 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 		return fmt.Errorf("failed to get model client: %w", err)
 	}
 
-	// Create shell manager for tools that need it
-	var shellManager *shell.ShellManager
+	// Create single shell manager for tools that need it
+	var singleShellManager *shell.SingleShellManager
 	if params.EnableTools {
-		shellManager = shell.NewShellManager(params.Logger)
+		var err error
+		singleShellManager, err = shell.NewSingleShellManager(params.Logger)
+		if err != nil {
+			return fmt.Errorf("failed to create shell manager: %w", err)
+		}
+		defer singleShellManager.Close()
 	}
 
 	// Set up toolbox (will be created contextually later)
 	var toolbox *agent.DefaultToolbox
 	if params.EnableTools {
-		toolbox, err = createToolbox(params.Logger, afero.NewOsFs(), shellManager)
+		toolbox, err = createToolbox(params.Logger, afero.NewOsFs(), singleShellManager)
 		if err != nil {
 			return fmt.Errorf("failed to create toolbox: %w", err)
 		}
@@ -133,17 +137,8 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 	justExecutedTools := false
 
 	for turnsRemaining > 0 {
-		// Create contextual toolbox for this step if tools are enabled
-		var contextualToolbox *agent.DefaultToolbox
-		if params.EnableTools && shellManager != nil {
-			contextualToolbox, err = createContextualToolbox(params.Logger, shellManager, conversation.ID)
-			if err != nil {
-				params.Logger.Warn("Failed to create contextual toolbox, using default", "error", err)
-				contextualToolbox = toolbox
-			}
-		} else {
-			contextualToolbox = toolbox
-		}
+		// For single shell, we just use the same toolbox without conversation-specific context
+		contextualToolbox := toolbox
 
 		// Prepare the message for this step
 		var messageToSend *aisdk.Message
@@ -267,13 +262,8 @@ func RunPromptWithApp(ctx context.Context, a *app.App, params RunPromptParams) e
 }
 
 // createToolbox creates a toolbox with all the default tools using the provided filesystem and shell manager
-func createToolbox(logger *slog.Logger, fs afero.Fs, shellManager *shell.ShellManager) (*agent.DefaultToolbox, error) {
+func createToolbox(logger *slog.Logger, fs afero.Fs, singleShellManager *shell.SingleShellManager) (*agent.DefaultToolbox, error) {
 	toolbox := agent.NewToolbox[agent.Tool]()
-	
-	// Use provided shell manager (create one if not provided for backward compatibility)
-	if shellManager == nil {
-		shellManager = shell.NewShellManager(logger)
-	}
 
 	// List of filesystem-based tool creation functions
 	fsToolCreators := []struct {
@@ -467,29 +457,20 @@ func createToolbox(logger *slog.Logger, fs afero.Fs, shellManager *shell.ShellMa
 		logger.Debug("Registered tool", "tool", tools.WebFetchName)
 	}
 
-	// Register RunCommandTool (requires shell manager)
-	runCommandTool := tools.RunCommandTool(shellManager)
-	if err := toolbox.RegisterTool(runCommandTool); err != nil {
-		return nil, fmt.Errorf("failed to register run command tool: %w", err)
-	}
-	if logger != nil {
-		logger.Debug("Registered tool", "tool", tools.RunCommandName)
+	// Register RunCommandTool (requires single shell manager)
+	if singleShellManager != nil {
+		runCommandTool := tools.RunCommandToolSingle(singleShellManager)
+		if err := toolbox.RegisterTool(runCommandTool); err != nil {
+			return nil, fmt.Errorf("failed to register run command tool: %w", err)
+		}
+		if logger != nil {
+			logger.Debug("Registered tool", "tool", tools.RunCommandName)
+		}
 	}
 
 	return toolbox, nil
 }
 
-// createContextualToolbox creates a toolbox that resolves paths relative to the shell's working directory
-func createContextualToolbox(logger *slog.Logger, shellManager *shell.ShellManager, conversationID string) (*agent.DefaultToolbox, error) {
-	// Create contextual filesystem based on shell's working directory
-	contextualFs, err := fs.NewContextualFsFromShell(afero.NewOsFs(), shellManager, conversationID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create contextual filesystem: %w", err)
-	}
-	
-	// Use the existing createToolbox function with the contextual filesystem and shell manager
-	return createToolbox(logger, contextualFs, shellManager)
-}
 
 // getOrCreateSessionAndConversation handles session and conversation setup
 func getOrCreateSessionAndConversation(ctx context.Context, service *executor.Service, params RunPromptParams) (session *storage.Session, conversation *storage.Conversation, err error) {

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/elee1766/gofer/src/shell"
 )
 
 // Package-level logger for tools
@@ -21,19 +20,7 @@ var logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 func SetLogger(l *slog.Logger) {
 	if l != nil {
 		logger = l
-		// Initialize the shell manager with the logger
-		shell.InitializeShellManager(l)
 	}
-}
-
-// SetConversationContext sets the current conversation ID for tool execution
-func SetConversationContext(conversationID string) {
-	shell.SetConversationContext(conversationID)
-}
-
-// GetConversationContext returns the current conversation ID
-func GetConversationContext() string {
-	return shell.GetConversationContext()
 }
 
 // Custom error types for better error handling

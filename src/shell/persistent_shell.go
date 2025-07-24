@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -45,14 +46,18 @@ func NewPersistentShell(logger *slog.Logger) (*PersistentShell, error) {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	// Create shell command with bash
-	cmd := exec.Command("bash", "--norc", "--noprofile")
+	// Create shell command with bash in a more robust way
+	cmd := exec.Command("bash", "--norc", "--noprofile", "-s")
 	cmd.Dir = currentDir
 	
-	// Set up environment
+	// Set up environment to minimize interference
 	cmd.Env = append(os.Environ(),
 		"PS1=", // Disable prompt to avoid interference
+		"PS2=", // Disable secondary prompt
+		"PS4=", // Disable xtrace prompt
+		"PROMPT_COMMAND=", // Disable prompt command
 		"TERM=dumb", // Simple terminal
+		"BASH_ENV=", // Don't source any files
 	)
 
 	// Create pipes
@@ -96,14 +101,35 @@ func NewPersistentShell(logger *slog.Logger) (*PersistentShell, error) {
 		closed:      false,
 	}
 
-	// Initial setup - set markers for output detection
 	shell.logger.Info("starting persistent shell session", "session_id", sessionID, "working_dir", currentDir)
+	
+	// Initialize shell with basic settings
+	initCommands := []string{
+		"set -u", // Error on undefined variables
+		"export LC_ALL=C", // Consistent locale
+		"export LANG=C",
+		"unset HISTFILE", // Don't save history
+		"set +o history", // Disable history
+	}
+	
+	for _, cmd := range initCommands {
+		if _, err := shell.stdin.Write([]byte(cmd + "\n")); err != nil {
+			shell.Close()
+			return nil, fmt.Errorf("failed to initialize shell with %s: %w", cmd, err)
+		}
+	}
 	
 	return shell, nil
 }
 
 // ExecuteCommand runs a command in the persistent shell
 func (ps *PersistentShell) ExecuteCommand(ctx context.Context, command string, timeout time.Duration) (*ShellResult, error) {
+	// Use the simpler implementation
+	return ps.ExecuteCommandSimple(ctx, command, timeout)
+}
+
+// ExecuteCommandOld runs a command in the persistent shell (old complex implementation)
+func (ps *PersistentShell) ExecuteCommandOld(ctx context.Context, command string, timeout time.Duration) (*ShellResult, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -111,16 +137,44 @@ func (ps *PersistentShell) ExecuteCommand(ctx context.Context, command string, t
 		return nil, fmt.Errorf("shell session is closed")
 	}
 
+	// Check if shell process is still alive
+	if ps.cmd.Process != nil {
+		if err := ps.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			ps.logger.Error("shell process is dead", "error", err)
+			ps.closed = true
+			return nil, fmt.Errorf("shell process has died")
+		}
+	}
+
 	ps.logger.Info("executing command in persistent shell", "command", command, "session_id", ps.sessionID)
 
-	// Create unique markers for this command
-	startMarker := fmt.Sprintf("__CMD_START_%d__", time.Now().UnixNano())
-	endMarker := fmt.Sprintf("__CMD_END_%d__", time.Now().UnixNano())
-	pwdMarker := fmt.Sprintf("__PWD_%d__", time.Now().UnixNano())
+	// Create a unique delimiter for this command
+	delimiter := fmt.Sprintf("__GOFER_%d__", time.Now().UnixNano())
+	
+	// Build command wrapper that ensures we get output and exit code
+	wrappedCommand := fmt.Sprintf(`
+# Execute command and capture result
+__gofer_output=$(mktemp)
+__gofer_error=$(mktemp)
+__gofer_exit=0
 
-	// Construct the full command with markers and directory tracking
-	fullCommand := fmt.Sprintf("echo '%s'; %s; EXIT_CODE=$?; echo '%s'; pwd; echo '%s'; exit $EXIT_CODE\n", 
-		startMarker, command, endMarker, pwdMarker)
+# Run the actual command
+{ %s; } > "$__gofer_output" 2> "$__gofer_error"
+__gofer_exit=$?
+
+# Output results with delimiters
+echo "%s:START"
+cat "$__gofer_output"
+echo "%s:STDOUT_END"
+cat "$__gofer_error" >&2
+echo "%s:STDERR_END"
+echo "%s:EXIT:$__gofer_exit"
+echo "%s:PWD:$(pwd)"
+echo "%s:DONE"
+
+# Cleanup
+rm -f "$__gofer_output" "$__gofer_error"
+`, command, delimiter, delimiter, delimiter, delimiter, delimiter, delimiter)
 
 	// Set up timeout
 	if timeout == 0 {
@@ -130,121 +184,131 @@ func (ps *PersistentShell) ExecuteCommand(ctx context.Context, command string, t
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Channel to collect results
-	resultChan := make(chan *ShellResult, 1)
-	errorChan := make(chan error, 1)
+	// Send command
+	if _, err := ps.stdin.Write([]byte(wrappedCommand)); err != nil {
+		ps.logger.Error("failed to write command", "error", err)
+		ps.closed = true
+		return nil, fmt.Errorf("failed to write command: %w", err)
+	}
 
-	// Execute command in goroutine
+	// Read response
+	type readResult struct {
+		output     string
+		errorOut   string
+		exitCode   int
+		workingDir string
+		err        error
+	}
+
+	resultChan := make(chan readResult, 1)
+
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				errorChan <- fmt.Errorf("panic in command execution: %v", r)
-			}
-		}()
-
-		// Send command
-		_, err := ps.stdin.Write([]byte(fullCommand))
-		if err != nil {
-			errorChan <- fmt.Errorf("failed to write command: %w", err)
-			return
-		}
-
-		// Read output until we see our markers
-		var outputLines []string
-		var errorLines []string
-		var newWorkingDir string
-		foundStart := false
-		foundEnd := false
-		foundPwd := false
-		exitCode := 0
-
-		// Read stdout
-		stdoutScanner := bufio.NewScanner(ps.stdout)
-		stderrScanner := bufio.NewScanner(ps.stderr)
-
-		// Read lines until we find our end marker
-		for !foundEnd {
+		var output strings.Builder
+		var errorOut strings.Builder
+		var exitCode int
+		var workingDir string
+		
+		stdoutReader := bufio.NewReader(ps.stdout)
+		stderrReader := bufio.NewReader(ps.stderr)
+		
+		readingOutput := false
+		readingError := false
+		done := false
+		
+		for !done {
 			select {
 			case <-cmdCtx.Done():
-				errorChan <- fmt.Errorf("command timed out after %v", timeout)
+				resultChan <- readResult{err: fmt.Errorf("timeout reading output")}
 				return
 			default:
 			}
 
-			// Try to read stdout
-			if stdoutScanner.Scan() {
-				line := stdoutScanner.Text()
-				
-				if line == startMarker {
-					foundStart = true
-					continue
-				} else if line == endMarker {
-					foundEnd = true
-					continue
-				} else if strings.HasPrefix(line, pwdMarker) {
-					foundPwd = true
-					continue
-				} else if foundEnd && foundPwd && !foundStart {
-					// This should be the pwd output
-					newWorkingDir = strings.TrimSpace(line)
-					break
-				} else if foundStart && !foundEnd {
-					// This is command output
-					outputLines = append(outputLines, line)
-				} else if foundPwd && !foundStart {
-					// This is the pwd output after command
-					newWorkingDir = strings.TrimSpace(line)
-				}
+			// Read stdout line
+			line, err := stdoutReader.ReadString('\n')
+			if err != nil && err != io.EOF {
+				resultChan <- readResult{err: fmt.Errorf("error reading stdout: %w", err)}
+				return
 			}
-
-			// Try to read stderr (non-blocking)
-			if stderrScanner.Scan() {
-				errorLines = append(errorLines, stderrScanner.Text())
-			}
-		}
-
-		// Try to get pwd if we haven't found it yet
-		if newWorkingDir == "" {
-			// Send a separate pwd command
-			pwdCmd := fmt.Sprintf("pwd; echo '%s'\n", pwdMarker)
-			ps.stdin.Write([]byte(pwdCmd))
 			
-			for stdoutScanner.Scan() {
-				line := stdoutScanner.Text()
-				if line == pwdMarker {
-					break
+			line = strings.TrimRight(line, "\n\r")
+			
+			switch {
+			case line == delimiter+":START":
+				readingOutput = true
+			case line == delimiter+":STDOUT_END":
+				readingOutput = false
+			case line == delimiter+":STDERR_END":
+				readingError = false
+			case strings.HasPrefix(line, delimiter+":EXIT:"):
+				parts := strings.Split(line, ":")
+				if len(parts) >= 3 {
+					fmt.Sscanf(parts[2], "%d", &exitCode)
 				}
-				if newWorkingDir == "" {
-					newWorkingDir = strings.TrimSpace(line)
+			case strings.HasPrefix(line, delimiter+":PWD:"):
+				parts := strings.SplitN(line, ":", 3)
+				if len(parts) >= 3 {
+					workingDir = parts[2]
+				}
+			case line == delimiter+":DONE":
+				done = true
+			default:
+				if readingOutput {
+					if output.Len() > 0 {
+						output.WriteString("\n")
+					}
+					output.WriteString(line)
+				}
+			}
+
+			// Try to read any stderr
+			if stderrReader.Buffered() > 0 {
+				errLine, _ := stderrReader.ReadString('\n')
+				errLine = strings.TrimRight(errLine, "\n\r")
+				if errLine == delimiter+":STDERR_END" {
+					readingError = false
+				} else if readingError || errLine != "" {
+					if errorOut.Len() > 0 {
+						errorOut.WriteString("\n")
+					}
+					errorOut.WriteString(errLine)
+					readingError = true
 				}
 			}
 		}
 
-		// Update current directory if we got a valid path
-		if newWorkingDir != "" && newWorkingDir != ps.currentDir {
-			ps.logger.Info("working directory changed", "old", ps.currentDir, "new", newWorkingDir)
-			ps.currentDir = newWorkingDir
+		resultChan <- readResult{
+			output:     output.String(),
+			errorOut:   errorOut.String(),
+			exitCode:   exitCode,
+			workingDir: workingDir,
+		}
+	}()
+
+	// Wait for result
+	select {
+	case result := <-resultChan:
+		if result.err != nil {
+			ps.logger.Error("command execution error", "command", command, "error", result.err)
+			return nil, result.err
 		}
 
-		result := &ShellResult{
-			Output:      strings.Join(outputLines, "\n"),
-			Error:       strings.Join(errorLines, "\n"),
-			ExitCode:    exitCode,
+		// Update working directory if changed
+		if result.workingDir != "" && result.workingDir != ps.currentDir {
+			ps.logger.Info("working directory changed", "old", ps.currentDir, "new", result.workingDir)
+			ps.currentDir = result.workingDir
+		}
+
+		shellResult := &ShellResult{
+			Output:      result.output,
+			Error:       result.errorOut,
+			ExitCode:    result.exitCode,
 			WorkingDir:  ps.currentDir,
 			CommandLine: command,
 		}
 
-		resultChan <- result
-	}()
+		ps.logger.Info("command completed", "command", command, "exit_code", result.exitCode, "working_dir", ps.currentDir)
+		return shellResult, nil
 
-	// Wait for result or timeout
-	select {
-	case result := <-resultChan:
-		ps.logger.Info("command completed", "command", command, "exit_code", result.ExitCode, "working_dir", result.WorkingDir)
-		return result, nil
-	case err := <-errorChan:
-		ps.logger.Error("command failed", "command", command, "error", err)
-		return nil, err
 	case <-cmdCtx.Done():
 		ps.logger.Error("command timed out", "command", command, "timeout", timeout)
 		return nil, fmt.Errorf("command timed out after %v", timeout)
@@ -256,6 +320,88 @@ func (ps *PersistentShell) GetCurrentDirectory() string {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.currentDir
+}
+
+// GetWorkingDirectory queries the shell for its actual current directory
+func (ps *PersistentShell) GetWorkingDirectory(ctx context.Context) (string, error) {
+	if err := ps.UpdateWorkingDirectory(ctx); err != nil {
+		return "", err
+	}
+	return ps.GetCurrentDirectory(), nil
+}
+
+// UpdateWorkingDirectory queries the shell for its current directory and updates the cached value
+func (ps *PersistentShell) UpdateWorkingDirectory(ctx context.Context) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if ps.closed {
+		return fmt.Errorf("shell session is closed")
+	}
+
+	// Use a simple pwd command with a unique marker
+	marker := fmt.Sprintf("__PWD_%d__", time.Now().UnixNano())
+	pwdCommand := fmt.Sprintf("pwd && echo '%s'\n", marker)
+
+	// Write command
+	if _, err := ps.stdin.Write([]byte(pwdCommand)); err != nil {
+		ps.logger.Error("failed to write pwd command", "error", err)
+		ps.closed = true
+		return fmt.Errorf("failed to write pwd command: %w", err)
+	}
+
+	// Read response with timeout
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	resultChan := make(chan string, 1)
+	errorChan := make(chan error, 1)
+
+	go func() {
+		reader := bufio.NewReader(ps.stdout)
+		var pwd string
+		
+		for {
+			select {
+			case <-ctx.Done():
+				errorChan <- fmt.Errorf("timeout reading pwd")
+				return
+			default:
+			}
+
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				errorChan <- fmt.Errorf("error reading pwd: %w", err)
+				return
+			}
+
+			line = strings.TrimSpace(line)
+			
+			// If we see our marker, the previous line was the pwd
+			if line == marker {
+				if pwd != "" {
+					resultChan <- pwd
+					return
+				}
+			} else if pwd == "" && line != "" && !strings.Contains(line, marker) {
+				// This might be the pwd output
+				pwd = line
+			}
+		}
+	}()
+
+	select {
+	case pwd := <-resultChan:
+		if pwd != ps.currentDir {
+			ps.logger.Info("working directory updated", "old", ps.currentDir, "new", pwd)
+			ps.currentDir = pwd
+		}
+		return nil
+	case err := <-errorChan:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("timeout getting working directory")
+	}
 }
 
 // GetOriginalDirectory returns the original working directory when shell was created
@@ -310,7 +456,30 @@ func (ps *PersistentShell) ValidateCommand(command string) error {
 		return fmt.Errorf("empty command not allowed")
 	}
 	
-	// Check for dangerous commands (same as before but adapted)
+	// Check for attempts to navigate outside using absolute paths
+	commandLower := strings.ToLower(command)
+	
+	// Check for cd to absolute paths outside the project
+	if strings.Contains(commandLower, "cd ") {
+		// Extract the path after cd
+		parts := strings.Fields(command)
+		for i, part := range parts {
+			if part == "cd" && i+1 < len(parts) {
+				targetPath := parts[i+1]
+				// Check if it's an absolute path
+				if strings.HasPrefix(targetPath, "/") && targetPath != "/" {
+					// Allow navigation within the original directory
+					if !strings.HasPrefix(targetPath, ps.originalDir) {
+						return fmt.Errorf("cannot navigate to absolute path outside project directory: %s", targetPath)
+					}
+				} else if targetPath == "/" {
+					return fmt.Errorf("cannot navigate to root directory")
+				}
+			}
+		}
+	}
+	
+	// Check for dangerous commands
 	dangerousCommands := []string{
 		"rm -rf", "rm -r", "sudo", "su ", "chmod 777", "chown",
 		"mkfs", "fdisk", "dd if=", ">/dev/", "curl", "wget",
@@ -322,7 +491,6 @@ func (ps *PersistentShell) ValidateCommand(command string) error {
 		"groupdel", "visudo", "crontab", "at ", "batch",
 	}
 
-	commandLower := strings.ToLower(command)
 	for _, dangerous := range dangerousCommands {
 		if strings.Contains(commandLower, dangerous) {
 			return fmt.Errorf("dangerous command not allowed: %s", command)
