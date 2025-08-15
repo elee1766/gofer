@@ -48,8 +48,8 @@ func NewGoferAgent(config Config, modelClient aisdk.ModelClient) *GoferAgent {
 	}
 }
 
-// SendMessageStream sends a message and returns a streaming response
-func (a *GoferAgent) SendMessageStream(ctx context.Context, messages []aisdk.Message) (aisdk.StreamInterface, error) {
+// SendMessage sends a message and returns a response
+func (a *GoferAgent) SendMessage(ctx context.Context, messages []aisdk.Message) (*aisdk.Message, error) {
 	// Convert messages to pointers
 	msgPtrs := make([]*aisdk.Message, len(messages))
 	for i := range messages {
@@ -62,7 +62,6 @@ func (a *GoferAgent) SendMessageStream(ctx context.Context, messages []aisdk.Mes
 		Temperature: a.config.Temperature,
 		MaxTokens:   a.config.MaxTokens,
 		TopP:        a.config.TopP,
-		Stream:      true,
 	}
 
 	// Add tools if enabled
@@ -71,19 +70,23 @@ func (a *GoferAgent) SendMessageStream(ctx context.Context, messages []aisdk.Mes
 		req.ToolChoice = "auto"
 	}
 
-	a.logger.Debug("Starting streaming message to AI",
+	a.logger.Debug("Starting message to AI",
 		"model", a.config.Model,
 		"message_count", len(messages),
 	)
 
-	// Send the streaming request
-	stream, err := a.modelClient.CreateChatCompletionStream(ctx, req)
+	// Send the request
+	response, err := a.modelClient.CreateChatCompletion(ctx, req)
 	if err != nil {
-		a.logger.Error("Failed to start streaming", "error", err)
-		return nil, fmt.Errorf("failed to start streaming: %w", err)
+		a.logger.Error("Failed to send message", "error", err)
+		return nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
-	a.logger.Debug("got stream from ai", "stream", stream)
+	if len(response.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
 
-	return stream, nil
+	a.logger.Debug("got response from ai", "response", response)
+
+	return &response.Choices[0].Message, nil
 }

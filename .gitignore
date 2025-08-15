@@ -93,3 +93,6 @@ node_modules/
 package-lock.json
 yarn.lock
 /gofer
+
+# Test directory for tool testing
+test_dir/

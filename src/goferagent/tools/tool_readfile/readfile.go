@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/elee1766/gofer/src/agent"
+	"github.com/elee1766/gofer/src/aisdk"
 	"github.com/elee1766/gofer/src/goferagent/toolsutil"
 	"github.com/spf13/afero"
 )
@@ -29,8 +30,8 @@ Usage:
 
 // ReadFileInput represents the parameters for read_file
 type ReadFileInput struct {
-	Path        string `json:"path" required:"true" description:"The file path"`
-	LineNumbers bool   `json:"line_numbers,omitempty" description:"Include line numbers in output"`
+	Path        string `json:"path" required:"true" description:"The file path to read (absolute or relative to current working directory)"`
+	LineNumbers bool   `json:"line_numbers,omitempty" description:"Include line numbers in output (format: '1: line content')"`
 }
 
 // ReadFileOutput represents the response from read_file
@@ -44,7 +45,20 @@ type ReadFileOutput struct {
 
 // Tool returns the read_file tool definition using GenericTool
 func Tool(fs afero.Fs) (agent.Tool, error) {
-	return agent.NewGenericTool(Name, readFilePrompt, makeReadFileHandler(fs))
+	return agent.NewGenericTool(Name, readFilePrompt, makeReadFileHandlerV2(fs))
+}
+
+// ToolMultimodal returns the read_file tool definition with multimodal support
+func ToolMultimodal(fs afero.Fs) (agent.Tool, error) {
+	return &agent.LegacyTool{
+		Type: "function",
+		Function: aisdk.ToolFunction{
+			Name:        Name,
+			Description: readFilePrompt,
+			Parameters:  nil, // Will be set via reflection if needed
+		},
+		Executor: makeReadFileHandlerMultimodal(fs),
+	}, nil
 }
 
 

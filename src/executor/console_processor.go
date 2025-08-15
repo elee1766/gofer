@@ -15,7 +15,6 @@ type ConsoleProcessorConfig struct {
 	ShowToolResults     bool
 	ShowIntermediateAI  bool
 	RawMode            bool
-	StreamMode         bool
 	MaxResultPreview    int // Max characters to show in result preview
 }
 
@@ -55,9 +54,7 @@ func (p *ConsoleEventProcessor) Process(event ConversationEvent) error {
 		// No output needed for stream start
 		
 	case *AssistantStreamChunkEvent:
-		if p.config.StreamMode {
-			fmt.Print(e.Content)
-		}
+		// Streaming is disabled, no output
 		
 	case *AssistantStreamEndEvent:
 		// No output needed for stream end
@@ -107,14 +104,12 @@ func (p *ConsoleEventProcessor) processUserMessage(e *UserMessageEvent) {
 
 // processAssistantMessage handles assistant message events
 func (p *ConsoleEventProcessor) processAssistantMessage(e *AssistantMessageEvent) {
-	if !p.config.StreamMode {
-		// Only show intermediate AI responses if configured
-		if len(e.ToolCalls) > 0 && p.config.ShowIntermediateAI && e.Content != "" {
-			fmt.Printf("\n💭 Assistant: %s\n", e.Content)
-		} else if len(e.ToolCalls) == 0 {
-			// Final response
-			fmt.Println(e.Content)
-		}
+	// Only show intermediate AI responses if configured
+	if len(e.ToolCalls) > 0 && p.config.ShowIntermediateAI && e.Content != "" {
+		fmt.Printf("\n💭 Assistant: %s\n", e.Content)
+	} else if len(e.ToolCalls) == 0 {
+		// Final response
+		fmt.Println(e.Content)
 	}
 }
 

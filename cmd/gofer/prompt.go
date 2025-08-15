@@ -28,7 +28,6 @@ type RunPromptParams struct {
 	Resume       bool
 	SessionID    string
 	MaxTurns     int
-	Stream       bool
 	Verbose      bool
 }
 
@@ -92,7 +91,6 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 		ShowToolResults:     true,
 		ShowIntermediateAI:  true,
 		RawMode:            params.Raw,
-		StreamMode:         params.Stream,
 		MaxResultPreview:    200,
 	}
 	
@@ -130,7 +128,6 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 		maxTurns = 3
 	}
 
-	var lastResponse *executor.StreamResponse
 	currentConv := aisdkConv
 	turnsRemaining := maxTurns
 	isFirstTurn := true
@@ -180,7 +177,6 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 			return stepResult.Error
 		}
 
-		lastResponse = stepResult.Response
 		currentConv = stepResult.UpdatedConversation
 		isFirstTurn = false
 		justExecutedTools = false
@@ -231,16 +227,7 @@ func RunPrompt(ctx context.Context, a *app.App, params RunPromptParams) error {
 		break
 	}
 
-	// Handle non-streaming output
-	if !params.Stream && lastResponse != nil {
-		// Format output based on settings
-		if params.Raw {
-			fmt.Print(lastResponse.Content)
-		} else {
-			// Default formatted output
-			fmt.Println(lastResponse.Content)
-		}
-	}
+	// Output is now handled by the console processor via events
 
 	// Emit conversation complete event
 	if eventSink != nil {

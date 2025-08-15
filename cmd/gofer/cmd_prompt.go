@@ -17,8 +17,6 @@ type PromptCmd struct {
 	File         string   `short:"f" help:"Load prompt from file"`
 	Output       string   `short:"o" help:"Output format (text, json, markdown)" default:"text"`
 	Raw          bool     `help:"Output raw response without formatting"`
-	Stream       bool     `help:"Stream response (show as it's generated)" default:"true"`
-	NoStream     bool     `help:"Disable streaming and wait for complete response"`
 	Model        string   `short:"m" help:"Model to use for this prompt" default:"google/gemini-2.5-flash"`
 	Temperature  float64  `help:"Override temperature for this prompt"`
 	MaxTokens    int      `help:"Override max tokens for this prompt"`
@@ -62,6 +60,5 @@ func (p *PromptCmd) Run(ctx *kong.Context, cli *CLI) error {
 		MaxTurns:     p.MaxTurns,
 		Model:        p.Model,
 		APIKey:       cli.APIKey,
-		Stream:       p.Stream && !p.NoStream,
 	})
 }

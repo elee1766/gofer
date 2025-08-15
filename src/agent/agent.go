@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/elee1766/gofer/src/aisdk"
@@ -15,7 +16,7 @@ type Agent struct {
 }
 
 // TODO: this probably should have a parameters struct
-func (a *Agent) SendMessageStream(ctx context.Context, conversation *aisdk.Conversation, message *aisdk.Message) (aisdk.StreamInterface, error) {
+func (a *Agent) SendMessage(ctx context.Context, conversation *aisdk.Conversation, message *aisdk.Message) (*aisdk.Message, error) {
 	messages := conversation.Messages
 	// TODO: if the existing messages dont exist, need to initialize a system prompt
 	if message != nil {
@@ -31,9 +32,14 @@ func (a *Agent) SendMessageStream(ctx context.Context, conversation *aisdk.Conve
 		Messages: messages,
 		Tools:    chatTools,
 	}
-	stream, err := a.Model.CreateChatCompletionStream(ctx, ccr)
+	response, err := a.Model.CreateChatCompletion(ctx, ccr)
 	if err != nil {
 		return nil, err
 	}
-	return stream, nil
+	
+	if len(response.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+	
+	return &response.Choices[0].Message, nil
 }

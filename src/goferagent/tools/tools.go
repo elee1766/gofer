@@ -52,7 +52,7 @@ var (
 
 // Tools that can return errors (kept as function wrappers)
 func PatchTool() (agent.Tool, error) { return tool_patchfile.Tool() }
-func ReadFileTool(fs afero.Fs) (agent.Tool, error) { return tool_readfile.Tool(fs) }
+func ReadFileTool(fs afero.Fs) (agent.Tool, error) { return tool_readfile.ToolMultimodal(fs) }
 func WriteFileTool(fs afero.Fs) (agent.Tool, error) { return tool_writefile.Tool(fs) }
 func ListDirectoryTool(fs afero.Fs) (agent.Tool, error) { return tool_listdir.Tool(fs) }
 func CreateDirectoryTool(fs afero.Fs) (agent.Tool, error) { return tool_createdir.Tool(fs) }

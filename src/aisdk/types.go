@@ -12,8 +12,9 @@ import (
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role              string             `json:"role"`
+	Content           string             `json:"content"`           // Legacy content field
+	MultimodalContent *MultimodalContent `json:"multimodal_content,omitempty"` // New structured content
 	// Name is required for tool responses to identify the function
 	Name string `json:"name,omitempty"`
 	// ToolCallID is required for tool responses to reference the original call
@@ -24,6 +25,23 @@ type Message struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// Metadata for message tracking
 	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// SetMultimodalContent sets the multimodal content and updates the legacy content field
+func (m *Message) SetMultimodalContent(content *MultimodalContent) {
+	m.MultimodalContent = content
+	// Update legacy content field for backward compatibility
+	if content != nil {
+		m.Content = content.ToLegacyString()
+	}
+}
+
+// GetContent returns the content as a string, preferring multimodal content
+func (m *Message) GetContent() string {
+	if m.MultimodalContent != nil {
+		return m.MultimodalContent.ToLegacyString()
+	}
+	return m.Content
 }
 
 // CacheControl specifies caching behavior for a message.
@@ -56,10 +74,28 @@ type FunctionCall struct {
 }
 
 type ToolResponse struct {
-	Type     string `json:"type"`
-	Content  []byte `json:"content"`
-	Metadata string `json:"metadata,omitempty"`
-	IsError  bool   `json:"is_error"`
+	Type              string             `json:"type"`
+	Content           []byte             `json:"content"`           // Legacy content field
+	MultimodalContent *MultimodalContent `json:"multimodal_content,omitempty"` // New structured content
+	Metadata          string             `json:"metadata,omitempty"`
+	IsError           bool               `json:"is_error"`
+}
+
+// SetMultimodalContent sets the multimodal content and updates the legacy content field
+func (tr *ToolResponse) SetMultimodalContent(content *MultimodalContent) {
+	tr.MultimodalContent = content
+	// Update legacy content field for backward compatibility
+	if content != nil {
+		tr.Content = []byte(content.ToLegacyString())
+	}
+}
+
+// GetContent returns the content as a string, preferring multimodal content
+func (tr *ToolResponse) GetContent() string {
+	if tr.MultimodalContent != nil {
+		return tr.MultimodalContent.ToLegacyString()
+	}
+	return string(tr.Content)
 }
 
 // ChatCompletionRequest represents a request to the chat completions endpoint.
@@ -71,7 +107,6 @@ type ChatCompletionRequest struct {
 	TopP             *float64               `json:"top_p,omitempty"`
 	FrequencyPenalty *float64               `json:"frequency_penalty,omitempty"`
 	PresencePenalty  *float64               `json:"presence_penalty,omitempty"`
-	Stream           bool                   `json:"stream,omitempty"`
 	Stop             []string               `json:"stop,omitempty"`
 	Tools            []*ChatTool            `json:"tools,omitempty"`
 	ToolChoice       string                 `json:"tool_choice,omitempty"` // "auto", "none", or specific tool
@@ -100,7 +135,6 @@ type Choice struct {
 	Index        int      `json:"index"`
 	Message      Message  `json:"message"`
 	FinishReason string   `json:"finish_reason"`
-	Delta        *Message `json:"delta,omitempty"` // For streaming
 }
 
 // Usage represents token usage information.
@@ -112,14 +146,6 @@ type Usage struct {
 	PromptTokensCached int `json:"prompt_tokens_cached,omitempty"`
 }
 
-// StreamChunk represents a single chunk in a streaming response.
-type StreamChunk struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices"`
-}
 
 // Error represents an API error response.
 type Error struct {
@@ -159,35 +185,6 @@ type ClientConfig struct {
 	Logger *slog.Logger
 }
 
-// StreamInterface defines the interface for reading streaming responses.
-type StreamInterface interface {
-	// Read reads the next chunk from the stream.
-	Read() (*StreamChunk, error)
-
-	// Close closes the stream.
-	Close() error
-}
-
-// StreamReader defines a more comprehensive streaming interface with additional methods.
-type StreamReader interface {
-	StreamInterface
-
-	// Err returns any error that occurred during streaming.
-	Err() error
-
-	// Done returns a channel that is closed when the stream is complete.
-	Done() <-chan struct{}
-}
-
-// ChatCompletionStreamResponse represents the response for streaming chat completions.
-type ChatCompletionStreamResponse struct {
-	Stream StreamInterface
-
-	// Optional: Metadata about the stream
-	RequestID string
-	Model     string
-	Created   int64
-}
 
 // ModelInfo contains comprehensive information about a specific model
 // Includes all fields from OpenRouter models endpoint

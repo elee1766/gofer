@@ -146,15 +146,5 @@ func (s *Service) SaveUserMessage(ctx context.Context, conversationID, content s
 	return storage.CreateMessage(ctx, s.database, userMsg)
 }
 
-// processStreamChunks reads and aggregates chunks from a stream into a complete response
-func (s *Service) processStreamChunks(ctx context.Context, stream aisdk.StreamInterface, callbacks *Callbacks, emitter *EventEmitter) (*StreamResponse, error) {
-	// Pass the streaming callback to processStreamChunks
-	var onContent func(string) error
-	if callbacks != nil && callbacks.OnStreamChunk != nil {
-		onContent = callbacks.OnStreamChunk
-	}
-
-	return processStreamChunks(ctx, stream, s.logger, onContent, emitter)
-}
 
 

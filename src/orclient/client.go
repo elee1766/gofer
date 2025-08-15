@@ -1,7 +1,6 @@
 package orclient
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -70,7 +69,6 @@ func NewClient(config Config) *Client {
 
 // createChatCompletion sends a chat completion request to OpenRouter (internal method).
 func (c *Client) createChatCompletion(ctx context.Context, req *aisdk.ChatCompletionRequest) (*aisdk.ChatCompletionResponse, error) {
-	req.Stream = false
 
 	logger := c.logger.With("method", "CreateChatCompletion", "model", req.Model)
 	logger.Debug("sending chat completion request")
@@ -120,50 +118,6 @@ func (c *Client) createChatCompletion(ctx context.Context, req *aisdk.ChatComple
 	return &result, nil
 }
 
-// createChatCompletionStream sends a streaming chat completion request to OpenRouter (internal method).
-func (c *Client) createChatCompletionStream(ctx context.Context, req *aisdk.ChatCompletionRequest) (aisdk.StreamInterface, error) {
-	req.Stream = true
-
-	logger := c.logger.With("method", "CreateChatCompletionStream", "model", req.Model)
-	logger.Debug("starting chat completion stream")
-
-	// Format the request based on the provider
-	formattedReq := c.formatRequestForProvider(req)
-
-	// Debug log the formatted request
-	if c.logger.Enabled(ctx, slog.LevelDebug) {
-		if debugBody, err := json.MarshalIndent(formattedReq, "", "  "); err == nil {
-			logger.Debug("formatted request", "body", string(debugBody))
-		}
-	}
-
-	body, err := json.Marshal(formattedReq)
-	if err != nil {
-		logger.Error("failed to marshal request", "error", err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := c.newRequest(ctx, "POST", "/chat/completions", body)
-	if err != nil {
-		return nil, err
-	}
-
-	// For streaming, we don't want retries
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		logger.Error("failed to send request", "error", err)
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		logger.Error("received error response", "status_code", resp.StatusCode)
-		return nil, c.handleError(resp)
-	}
-
-	logger.Debug("stream started successfully")
-	return NewStreamReader(resp.Body), nil
-}
 
 // newRequest creates a new HTTP request with the appropriate headers.
 func (c *Client) newRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
@@ -276,99 +230,6 @@ func (c *Client) handleError(resp *http.Response) error {
 	return apiErr
 }
 
-// StreamReader handles server-sent events streaming.
-type StreamReader struct {
-	reader  *bufio.Reader
-	closer  io.Closer
-	decoder *json.Decoder
-}
-
-// NewStreamReader creates a new stream reader.
-func NewStreamReader(body io.ReadCloser) *StreamReader {
-	return &StreamReader{
-		reader: bufio.NewReader(body),
-		closer: body,
-	}
-}
-
-// Read reads the next chunk from the stream.
-func (s *StreamReader) Read() (*aisdk.StreamChunk, error) {
-	for {
-		line, err := s.reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				return nil, io.EOF
-			}
-			return nil, fmt.Errorf("failed to read stream: %w", err)
-		}
-
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines
-		if line == "" {
-			continue
-		}
-
-		// Check for SSE data prefix
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		// Check for end of stream
-		if data == "[DONE]" {
-			return nil, io.EOF
-		}
-		
-
-		// Parse the JSON chunk
-		var chunk aisdk.StreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return nil, fmt.Errorf("failed to parse stream chunk: %w", err)
-		}
-		
-		// Handle tool call arguments that always come as JSON strings
-		if len(chunk.Choices) > 0 {
-			choice := &chunk.Choices[0]
-			// Check delta tool calls
-			if choice.Delta != nil && len(choice.Delta.ToolCalls) > 0 {
-				for i := range choice.Delta.ToolCalls {
-					tc := &choice.Delta.ToolCalls[i]
-					if len(tc.Function.Arguments) > 0 {
-						// Arguments are always JSON strings, unmarshal them
-						var unquoted string
-						if err := json.Unmarshal(tc.Function.Arguments, &unquoted); err != nil {
-							return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
-						}
-						tc.Function.Arguments = json.RawMessage(unquoted)
-					}
-				}
-			}
-			// Check message tool calls
-			if len(choice.Message.ToolCalls) > 0 {
-				for i := range choice.Message.ToolCalls {
-					tc := &choice.Message.ToolCalls[i]
-					if len(tc.Function.Arguments) > 0 {
-						// Arguments are always JSON strings, unmarshal them
-						var unquoted string
-						if err := json.Unmarshal(tc.Function.Arguments, &unquoted); err != nil {
-							return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
-						}
-						tc.Function.Arguments = json.RawMessage(unquoted)
-					}
-				}
-			}
-		}
-
-		return &chunk, nil
-	}
-}
-
-// Close closes the stream reader.
-func (s *StreamReader) Close() error {
-	return s.closer.Close()
-}
 
 // GetModels implements ModelContextProvider.GetModels
 func (c *Client) GetModels(ctx context.Context) ([]*aisdk.ModelInfo, error) {
@@ -462,7 +323,7 @@ func (c *Client) formatAnthropicRequest(req *aisdk.ChatCompletionRequest) interf
 		Messages:    anthropicMessages,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream,
+		Stream:      false,
 		Tools:       req.Tools,
 	}
 }
@@ -521,7 +382,7 @@ func (c *Client) formatGoogleRequest(req *aisdk.ChatCompletionRequest) interface
 		Messages:    googleMessages,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream,
+		Stream:      false,
 		Tools:       req.Tools,
 	}
 }
@@ -579,7 +440,7 @@ func (c *Client) formatOpenAIRequest(req *aisdk.ChatCompletionRequest) interface
 		Messages:    openaiMessages,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream,
+		Stream:      false,
 		Tools:       req.Tools,
 	}
 }

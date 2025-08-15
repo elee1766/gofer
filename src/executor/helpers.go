@@ -13,7 +13,7 @@ import (
 )
 
 // saveAssistantMessage saves an assistant message to the database
-func (s *Service) saveAssistantMessage(ctx context.Context, conversationID, model string, response *StreamResponse) error {
+func (s *Service) saveAssistantMessage(ctx context.Context, conversationID, model string, response *Response) error {
 	// Don't save if both content and tool calls are empty
 	if response.Content == "" && len(response.ToolCalls) == 0 {
 		return nil

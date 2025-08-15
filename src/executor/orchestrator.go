@@ -43,7 +43,7 @@ type StepResult struct {
 	State ExecutionState
 
 	// The response from the model (if any)
-	Response *StreamResponse
+	Response *Response
 
 	// Tool calls that need to be executed (if State == StateToolCallsNeeded)
 	ToolCalls []aisdk.ToolCall
@@ -89,34 +89,21 @@ func (s *Service) Step(ctx context.Context, req *StepRequest) (*StepResult, erro
 		Logger:       s.logger,
 	}
 
-	// Send message and get stream
-	stream, err := agent.SendMessageStream(ctx, req.Conversation, req.Message)
+	// Send message and get response
+	assistantMsg, err := agent.SendMessage(ctx, req.Conversation, req.Message)
 	if err != nil {
 		if emitter != nil {
-			emitter.EmitError(err, "agent.SendMessageStream")
+			emitter.EmitError(err, "agent.SendMessage")
 		}
 		return &StepResult{State: StateError, Error: err}, nil
 	}
-	defer stream.Close()
-
-	// Emit stream start event
-	if emitter != nil {
-		emitter.EmitAssistantStreamStart(req.ModelClient.GetModelInfo().ID)
+	
+	// Convert to our Response type
+	response := &Response{
+		Content:   assistantMsg.Content,
+		ToolCalls: assistantMsg.ToolCalls,
 	}
 
-	// Process stream chunks
-	response, err := s.processStreamChunks(ctx, stream, req.Callbacks, emitter)
-	if err != nil {
-		if emitter != nil {
-			emitter.EmitError(err, "processStreamChunks")
-		}
-		return &StepResult{State: StateError, Error: err}, nil
-	}
-
-	// Emit stream end event
-	if emitter != nil {
-		emitter.EmitAssistantStreamEnd()
-	}
 
 	// Emit assistant message event
 	if emitter != nil {
@@ -144,11 +131,6 @@ func (s *Service) Step(ctx context.Context, req *StepRequest) (*StepResult, erro
 	}
 
 	// Add assistant response
-	assistantMsg := &aisdk.Message{
-		Role:      "assistant",
-		Content:   response.Content,
-		ToolCalls: response.ToolCalls,
-	}
 	updatedConv.Messages = append(updatedConv.Messages, assistantMsg)
 
 	// Determine next state based on response
